@@ -1,0 +1,175 @@
+# config.yaml - Fleet Telematics Generator Configuration
+
+# Global settings
+seed: 42
+acceleration_factor: 1   # Day-1 throughput test: R = 500 msgs/sec -> A <= 1.18 for the evidence profile (still to be confirmed)
+
+# Run modes: smoke, live_demo, evidence, clean
+mode: "evidence"
+
+# Simulated world
+simulation:
+  start: "2026-01-01 00:00:00"        # simulation clock start (sim_start)
+  departure_window_start_hour: 6      # trips depart from 06:00 ...
+  days: 1                            # simulated days of trips (one trip per vehicle per day); the stream generator runs them back to back
+refrigerated_share: 0.6               # share of vehicles that are refrigeration-capable
+driver_ratio: 0.6                     # drivers per vehicle (each driver gets at most 2 non-overlapping trips)
+
+# Declared synthetic fuel prices (EGP per litre); vehicles pick their fuel_type from these keys
+fuel_prices:
+  diesel: 15.0
+
+# Slowly changing dimension changes (vehicle change files, section 7.7)
+scd:
+  change_hour: 12                     # scripted changes (V002 retrofit, V007 correction, V010 device swap) at 12:00 sim time
+  bulk_change_hour: 15                # bulk changes file
+  bulk_per_5000_vehicles:             # scaled down for smaller profiles (smoke = 0)
+    retrofits: 15
+    device_swaps: 10
+    corrections: 5
+
+# Offline (store-and-forward) windows (P1-12). enabled: false keeps the output identical to the run without P1-12.
+# While offline the device stores its readings (consecutive sequence numbers, true event_time). On reconnect it sends
+# a device_status report and then the stored readings: as a burst on the stream or as a bulk file
+# (<out>/landing/offline/<vehicle_id>_<upload_id>.jsonl). No data faults (P1-10) are applied to stored readings.
+# An overflow window lasts (buffer_capacity_messages x gps interval) + overflow_extra_min..max minutes, so the buffer
+# really overflows in every profile; the oldest messages beyond the capacity (per signal) are lost for good.
+# Needs the device_status endpoint in .env.
+offline:
+  enabled: false
+  trips_share: 0.08                   # share of trips with an offline window
+  min_minutes: 3                      # shortest outage
+  max_minutes: 60                     # longest outage when the buffer survives (cut to 95 percent of the buffer if shorter)
+  buffer_survives_share: 0.85         # 85 percent keep everything, 15 percent overflow
+  buffer_capacity_messages: 300       # per signal
+  burst_share: 0.5                    # average share flushed as a burst on the stream (longer outages favour the bulk file)
+  overflow_extra_min_minutes: 5
+  overflow_extra_max_minutes: 20
+
+profiles:
+  smoke:
+    vehicle_count: 20
+    route_count: 3
+    departure_window_hours: 12
+    acceleration_factor: 50           # about 240 msgs/sec at the peak, below 0.5 x R
+    intervals_sec:
+      gps: 10
+      engine: 10
+      fuel: 60
+      temperature: 30
+  live_demo:
+    vehicle_count: 200
+    route_count: 8
+    departure_window_hours: 12
+    acceleration_factor: 5            # about 240 msgs/sec at the peak, below 0.5 x R
+    intervals_sec:
+      gps: 10
+      engine: 10
+      fuel: 60
+      temperature: 30
+  evidence:
+    vehicle_count: 5000
+    route_count: 12                   # add more city pairs in ROUTE_DEFS (generate_reference_data.py) to approach ~40
+    departure_window_hours: 12        # section 6.2 proposes about 6; 12 halves the peak (see the acceleration factor decision)
+    acceleration_factor: 1            # formula with R = 500 gives 1.18 (decision pending, see phase1_foundation.md 5.1)
+    intervals_sec:
+      gps: 30
+      engine: 30
+      fuel: 120
+      temperature: 60
+  clean:                              # baseline: all anomaly and fault rates are zero
+    vehicle_count: 20
+    route_count: 3
+    departure_window_hours: 12
+    acceleration_factor: 50
+    zero_rates: true
+    intervals_sec:
+      gps: 10
+      engine: 10
+      fuel: 60
+      temperature: 30
+
+# Make sure small runs (smoke) contain at least this many of EACH injected case:
+# cold-chain breach, cold-chain blip (negative), idling, route deviation, GPS wander (negative),
+# sensor fault, stuck sensor, unit error vehicle, late arrival, late within grace (negative),
+# and, when offline.enabled is true, an offline window flushed as a burst, one flushed as a file and one buffer overflow.
+# Ignored in clean mode and when the profile has zero_rates.
+injection:
+  min_per_type: 1
+
+# Anomaly and Fault Rates (0.0 to 1.0)
+# cold_chain_breach: share of cold-cargo trips; one in three of these is a short blip that must NOT alert.
+# idling / route_deviation: share of all trips; a matching negative case (GPS wander) is added at the deviation rate.
+# late_arrival (P1-11): share of trips that arrive 10 to 60 minutes after planned end plus grace (alert expected).
+# late_within_grace (P1-11): share of trips that arrive after the planned end but inside the grace (negative case, no alert).
+#   Both need room before the next trip of the same vehicle; trips without room are skipped.
+# Data faults (P1-10), each is a share of the messages of the signals it applies to (one fault per message at most):
+#   malformed_payload, duplicate_rate, near_duplicate_rate, dropped_message_rate, missing_field_rate,
+#   wrong_type_rate, bad_timestamp_rate, unknown_vehicle_rate, schema_drift_rate  -> all four signals
+#   invalid_gps_rate -> gps | impossible_value_rate -> gps and engine | temperature_spike_rate -> temperature
+# unit_error_vehicle_share: share of refrigerated vehicles that report temperature in F for their whole trips.
+# sensor_fault_trips / stuck_sensor_trips: share of cold-cargo trips with a null/FAULT sensor window / a flat sensor window.
+rates:
+  cold_chain_breach: 0.05
+  idling: 0.05
+  route_deviation: 0.05
+  late_arrival: 0.05
+  late_within_grace: 0.05
+  malformed_payload: 0.002
+  duplicate_rate: 0.005
+  near_duplicate_rate: 0.002
+  dropped_message_rate: 0.003
+  missing_field_rate: 0.002
+  wrong_type_rate: 0.002
+  invalid_gps_rate: 0.001
+  impossible_value_rate: 0.001
+  bad_timestamp_rate: 0.001
+  temperature_spike_rate: 0.001
+  unknown_vehicle_rate: 0.0005
+  schema_drift_rate: 0.0005
+  unit_error_vehicle_share: 0.01
+  sensor_fault_trips: 0.02
+  stuck_sensor_trips: 0.005
+  poison_batch_mode: false            # true = raise the malformed rate for a short window (see poison_batch)
+
+# Poison batch (failure test): the malformed rate rises to malformed_rate during the window on the first simulated day.
+poison_batch:
+  malformed_rate: 0.10
+  start_hour: 10                      # simulated hour of day 1 at which the window starts
+  duration_minutes: 5
+
+# Reference-file faults (extra delimiter, missing column, overlapping trips, ...): handled by generate_reference_data.py.
+# true = it also writes reference_faults/ (the normal reference/ folder stays valid).
+reference_file_faults: false
+
+# Written to reference/business_rules.csv by generate_reference_data.py.
+# The four expected_interval_* rules are NOT listed here: they are written from the active profile's intervals_sec.
+business_rules:
+  - {rule_name: idle_speed_threshold_kmh, rule_value: 2, unit: km/h, description: "Speed below this counts as stationary"}
+  - {rule_name: idle_minutes_threshold, rule_value: 5, unit: minutes, description: "An idling episode this long counts as excessive idling"}
+  - {rule_name: speeding_tolerance_kmh, rule_value: 5, unit: km/h, description: "Speed above the route limit plus this counts as speeding"}
+  - {rule_name: gps_accuracy_max_meters, rule_value: 50, unit: meters, description: "Fixes less accurate than this are ignored for route deviation"}
+  - {rule_name: deviation_consecutive_readings, rule_value: 3, unit: readings, description: "Consecutive off-route readings before a deviation alert"}
+  - {rule_name: gps_jump_max_kmh, rule_value: 200, unit: km/h, description: "Implied speed between two fixes above this is flagged IMPOSSIBLE_JUMP"}
+  - {rule_name: speed_max_kmh, rule_value: 130, unit: km/h, description: "Above this a speed reading is OUT_OF_RANGE"}
+  - {rule_name: engine_rpm_max, rule_value: 4000, unit: rpm, description: "Above this an RPM reading is OUT_OF_RANGE"}
+  - {rule_name: engine_temperature_max_c, rule_value: 130, unit: C, description: "Above this an engine temperature reading is OUT_OF_RANGE"}
+  - {rule_name: cargo_temperature_valid_min_c, rule_value: -40, unit: C, description: "Below this a cargo reading is OUT_OF_RANGE (sensor plausibility)"}
+  - {rule_name: cargo_temperature_valid_max_c, rule_value: 60, unit: C, description: "Above this a cargo reading is OUT_OF_RANGE (sensor plausibility)"}
+  - {rule_name: temperature_spike_c, rule_value: 8, unit: C, description: "A jump larger than this between consecutive readings is flagged SPIKE"}
+  - {rule_name: flatline_readings, rule_value: 20, unit: readings, description: "This many identical cargo readings in a row are flagged FLATLINE"}
+  - {rule_name: future_timestamp_tolerance_minutes, rule_value: 5, unit: minutes, description: "An event_time this far ahead of simulated now is INVALID_TIMESTAMP"}
+  - {rule_name: offline_missed_intervals, rule_value: 3, unit: intervals, description: "A signal is stale after this many missed intervals"}
+  - {rule_name: late_data_watermark_minutes, rule_value: 10, unit: minutes, description: "The live job ignores data older than this behind the fleet latest event time"}
+  - {rule_name: sequence_gap_grace_minutes, rule_value: 120, unit: minutes, description: "How long a sequence gap may stay open before it becomes a DATA_GAP alert"}
+  - {rule_name: dq_window_minutes, rule_value: 10, unit: minutes, description: "Window used for the invalid-rate alert"}
+  - {rule_name: invalid_rate_alert_pct, rule_value: 2, unit: percent, description: "An invalid share above this in the window raises HIGH_INVALID_RATE"}
+  - {rule_name: quality_gate_max_invalid_pct, rule_value: 5, unit: percent, description: "Quality gate 1 stops Gold above this invalid share in a batch"}
+  - {rule_name: score_weight_speeding, rule_value: 35, unit: points, description: "Driver scorecard: maximum speeding penalty"}
+  - {rule_name: score_weight_idling, rule_value: 30, unit: points, description: "Driver scorecard: maximum idling penalty"}
+  - {rule_name: score_weight_deviation, rule_value: 20, unit: points, description: "Driver scorecard: maximum route deviation penalty"}
+  - {rule_name: score_weight_lateness, rule_value: 15, unit: points, description: "Driver scorecard: maximum late arrival penalty"}
+  - {rule_name: score_limit_speeding_pct, rule_value: 5, unit: percent, description: "Full speeding penalty when speeding minutes reach this share of driving minutes"}
+  - {rule_name: score_limit_idling_pct, rule_value: 10, unit: percent, description: "Full idling penalty when excessive idle minutes reach this share of engine-on minutes"}
+  - {rule_name: score_limit_deviation_episodes, rule_value: 2, unit: episodes, description: "Full deviation penalty at this many deviation episodes on a trip"}
+  - {rule_name: score_limit_late_minutes, rule_value: 60, unit: minutes, description: "Full lateness penalty when arrival is this late beyond planned end plus grace"}
