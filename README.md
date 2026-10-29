@@ -42,7 +42,7 @@ The simulator injects known anomalies, data faults, late arrivals and offline wi
 
 ## 2. Architecture
 
-![Architecture](screenshots/the_architure_of_the_project.jpeg)
+![Architecture](screenshots/the%20architure%20of%20the%20project.jpeg)
 
 ```text
 Fleet generator (Python, seeded, outside Fabric)
@@ -169,7 +169,7 @@ One raw table per signal in Eventhouse, with a single `raw_value` column in TXT 
 
 `nb_p3_batch_job_2` builds the galaxy schema.
 
-![Galaxy schema](screenshots/galaxy_schema_modeling.jpeg)
+![Galaxy schema](screenshots/galaxy_schema%20modeling.jpeg)
 
 | Type | Tables |
 |---|---|
